@@ -2,10 +2,12 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Worker from "./internal/worker";
 import * as Layer from "effect/Layer";
+import { Env } from "./internal/env";
 
 export default Worker.makeFetchEntryPoint(
   Effect.fn(function* (_req, env, ctx) {
     const maybeValue = yield* env.KV.get("last_accessed");
+    yield* env.BUCKET.put("foobar.json", JSON.stringify({ foo: "bar" }));
 
     ctx.waitUntil(
       Effect.gen(function* () {
@@ -25,3 +27,43 @@ export default Worker.makeFetchEntryPoint(
   }),
   { layer: Layer.empty },
 );
+
+export const asyncEntryPoint = {
+  fetch(req: Request, env: Cloudflare.Env, ctx: globalThis.ExecutionContext) {
+    const maybeValue = env.KV.get("last_accessed");
+
+    // env.BUCKET.get
+
+    ctx.waitUntil(
+      (async () => {
+        console.log("runs after response");
+        env.KV.put("last_accessed", `${Date.now()}`);
+      })(),
+    );
+
+    if (maybeValue === null) {
+      return new Response(
+        JSON.stringify({ last_accessed: "Never accessed :(" }),
+        {
+          status: 404,
+        },
+      );
+    }
+
+    return new Response(JSON.stringify({ last_accessed: maybeValue }), {
+      status: 200,
+    });
+  },
+};
+
+function businessLogic() {
+  return Effect.gen(function* () {
+    const env = yield* Env;
+
+    env.BUCKET.head;
+
+    const maybeValue = yield* env.KV.get("myKey");
+
+    return maybeValue;
+  });
+}

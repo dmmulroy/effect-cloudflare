@@ -3,10 +3,14 @@ import { dual } from "effect/Function";
 import * as Context from "effect/Context";
 import type { KVNamespace as EffectKVNamespace } from "./kv-namespace";
 import { make as makeKVNamespace } from "./kv-namespace";
+import type { R2Bucket as EffectR2Bucket } from "./r2-bucket";
+import { make as makeR2Bucket } from "./r2-bucket";
 
 type EffectifyBinding<Value> = [Value] extends [KVNamespace]
   ? EffectKVNamespace
-  : Value;
+  : [Value] extends [R2Bucket]
+    ? EffectR2Bucket
+    : Value;
 
 type EffectifyEnv<Env = Cloudflare.Env> = {
   [Binding in keyof Env]: EffectifyBinding<Env[Binding]>;
@@ -24,7 +28,21 @@ function isKVNamespace(binding: unknown): binding is globalThis.KVNamespace {
     "get" in binding &&
     "put" in binding &&
     "list" in binding &&
-    "delete" in binding
+    "delete" in binding &&
+    !("head" in binding) // R2Bucket also has get/put/list/delete but has head
+  );
+}
+
+function isR2Bucket(binding: unknown): binding is globalThis.R2Bucket {
+  return (
+    binding !== undefined &&
+    binding !== null &&
+    typeof binding === "object" &&
+    "head" in binding &&
+    "get" in binding &&
+    "put" in binding &&
+    "delete" in binding &&
+    "list" in binding
   );
 }
 
@@ -38,8 +56,12 @@ export const makeEnv = (env: Cloudflare.Env): CloudflareEnv => {
   for (const key in env) {
     const binding = env[key as keyof typeof env];
 
+    // Detect R2Bucket binding first (more specific - has head method)
+    if (isR2Bucket(binding)) {
+      effectEnv[key] = makeR2Bucket(binding);
+    }
     // Detect KVNamespace binding by checking for required methods
-    if (isKVNamespace(binding)) {
+    else if (isKVNamespace(binding)) {
       effectEnv[key] = makeKVNamespace(binding);
     } else {
       effectEnv[key] = binding;
