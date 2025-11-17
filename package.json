@@ -1,0 +1,20 @@
+{
+  "name": "effect-cloudflare",
+  "module": "src/scratch.ts",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@effect/platform": "^0.93.2",
+    "effect": "^3.19.3"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.8.19",
+    "@effect/language-service": "^0.56.0",
+    "@types/node": "^24.10.1",
+    "vitest": "~3.2.0",
+    "wrangler": "^4.47.0"
+  }
+}
