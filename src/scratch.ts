@@ -7,7 +7,18 @@ import { Env } from "./internal/env";
 export default Worker.makeFetchEntryPoint(
   Effect.fn(function* (_req, env, ctx) {
     const maybeValue = yield* env.KV.get("last_accessed");
-    yield* env.BUCKET.put("foobar.json", JSON.stringify({ foo: "bar" }));
+
+    // const obj = yield* Effect.tryPromise(() =>
+    //   env["~raw"].BUCKET.get("foobar.json"),
+    // );
+    //
+
+    // yield* env.BUCKET.put("tmp/foobar.json", JSON.stringify({ foo: "bar" }));
+    const obj = yield* env.BUCKET.get("foobar.json").pipe(Effect.flatten);
+
+    const value = yield* Effect.promise(() => obj.json<{ foo: "bar" }>());
+
+    console.log({ value });
 
     ctx.waitUntil(
       Effect.gen(function* () {
@@ -15,7 +26,6 @@ export default Worker.makeFetchEntryPoint(
         yield* env.KV.put("last_accessed", `${Date.now()}`);
       }),
     );
-
     return Option.match(maybeValue, {
       onNone: () =>
         new Response(JSON.stringify({ last_accessed: "Never accessed :(" }), {
@@ -31,8 +41,6 @@ export default Worker.makeFetchEntryPoint(
 export const asyncEntryPoint = {
   fetch(req: Request, env: Cloudflare.Env, ctx: globalThis.ExecutionContext) {
     const maybeValue = env.KV.get("last_accessed");
-
-    // env.BUCKET.get
 
     ctx.waitUntil(
       (async () => {

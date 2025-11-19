@@ -11,6 +11,28 @@ import { dual } from "effect/Function";
 
 /**
  * @since 1.0.0
+ * @category constants
+ * @internal
+ */
+const R2ErrorCode = {
+  INTERNAL_ERROR: 10001,
+  NO_SUCH_OBJECT_KEY: 10007,
+  ENTITY_TOO_LARGE: 100100,
+  ENTITY_TOO_SMALL: 10011,
+  METADATA_TOO_LARGE: 10012,
+  INVALID_OBJECT_NAME: 10020,
+  INVALID_MAX_KEYS: 10022,
+  NO_SUCH_UPLOAD: 10024,
+  INVALID_PART: 10025,
+  INVALID_ARGUMENT: 10029,
+  PRECONDITION_FAILED: 10031,
+  BAD_DIGEST: 10037,
+  INVALID_RANGE: 10039,
+  BAD_UPLOAD: 10048,
+} as const;
+
+/**
+ * @since 1.0.0
  * @category type id
  */
 export const TypeId: unique symbol = Symbol.for(
@@ -173,7 +195,8 @@ export class R2ConcurrencyError extends Schema.TaggedError<R2ConcurrencyError>(
  *
  * Thrown when attempting to store an object that exceeds size limits.
  *
- * **Status Code:** 413
+ * **Status Code:** 400
+ * **Error Code:** 100100
  *
  * **Limits:**
  * - Maximum object size: 5 TiB (4.995 TiB)
@@ -227,20 +250,15 @@ export class R2ObjectTooLargeError extends Schema.TaggedError<R2ObjectTooLargeEr
  * @since 1.0.0
  * @category errors
  * @see https://developers.cloudflare.com/r2/platform/limits/ - Key length limit of 1024 bytes
- * @see https://developers.cloudflare.com/r2/api/workers/workers-api-reference/ - Range request documentation
  *
- * Thrown when a key violates validation rules or range request is invalid.
+ * Thrown when a key violates validation rules.
  *
- * **Status Codes:** 400, 414, 416
+ * **Status Code:** 400
+ * **Error Code:** 10020
  *
  * **Invalid keys:**
  * - Empty string
  * - UTF-8 encoded length > 1024 bytes
- *
- * **Invalid ranges:**
- * - Offset beyond object size
- * - Invalid suffix value
- * - Invalid length value
  *
  * @example
  * ```typescript
@@ -283,13 +301,16 @@ export class R2InvalidKeyError extends Schema.TaggedError<R2InvalidKeyError>(
 /**
  * @since 1.0.0
  * @category errors
- * @see https://developers.cloudflare.com/r2/platform/limits/ - Metadata limit of 8192 bytes
+ * @see https://developers.cloudflare.com/r2/platform/limits/ - Metadata limit of 8192 bytes total
  *
- * Thrown when metadata exceeds the 8192 byte limit (combined httpMetadata and customMetadata).
+ * Thrown when metadata exceeds size limits.
  *
- * **Status Code:** 413
+ * **Status Code:** 400
+ * **Error Code:** 10012
  *
- * **Limit:** 8192 bytes total for httpMetadata and customMetadata combined
+ * **Limits:**
+ * - customMetadata: 2048 bytes
+ * - Total metadata (httpMetadata + customMetadata): 8192 bytes
  *
  * @example
  * ```typescript
@@ -300,9 +321,9 @@ export class R2InvalidKeyError extends Schema.TaggedError<R2InvalidKeyError>(
  * const program = Effect.gen(function* () {
  *   const bucket = yield* R2.R2Bucket
  *
- *   // Metadata that exceeds 8192 bytes
+ *   // Metadata that exceeds 2048 bytes
  *   const largeMetadata = {
- *     description: "x".repeat(9000)
+ *     description: "x".repeat(3000)
  *   }
  *
  *   // This will throw R2MetadataError
@@ -671,19 +692,338 @@ export class R2NetworkError extends Schema.TaggedError<R2NetworkError>(
 
 /**
  * @since 1.0.0
+ * @category errors
+ *
+ * Thrown when attempting to upload a part that is too small in a multipart upload.
+ *
+ * **Status Code:** 400
+ * **Error Code:** 10011
+ *
+ * **Constraints:**
+ * - All parts except the last must be >= 5 MiB
+ * - Last part can be smaller
+ *
+ * @example
+ * ```typescript
+ * import { Effect } from "effect"
+ * import * as R2 from "@effect-cloudflare/R2Bucket"
+ *
+ * const program = Effect.gen(function* () {
+ *   const bucket = yield* R2.R2Bucket
+ *   const upload = yield* bucket.createMultipartUpload("large-file")
+ *
+ *   // This will throw R2ObjectTooSmallError
+ *   yield* upload.uploadPart(1, "small")  // < 5 MiB
+ * }).pipe(
+ *   Effect.catchTag("R2ObjectTooSmallError", (error) =>
+ *     Effect.log("Part too small for multipart upload")
+ *   )
+ * )
+ * ```
+ */
+export class R2ObjectTooSmallError extends Schema.TaggedError<R2ObjectTooSmallError>(
+  "@effect-cloudflare/R2BucketError/ObjectTooSmall",
+)("R2ObjectTooSmallError", {
+  key: Schema.String,
+  operation: R2Operation,
+  sizeBytes: Schema.optional(Schema.Number),
+  partNumber: Schema.optional(Schema.Number),
+}) {
+  /**
+   * @since 1.0.0
+   */
+  readonly [TypeId]: typeof TypeId = TypeId;
+
+  /**
+   * @since 1.0.0
+   */
+  override get message(): string {
+    const sizeMsg = this.sizeBytes ? ` (${this.sizeBytes} bytes)` : "";
+    const partMsg =
+      this.partNumber !== undefined ? ` part ${this.partNumber}` : "";
+    return `R2 object too small for key "${this.key}"${partMsg}${sizeMsg} during ${this.operation}. Parts must be >= 5 MiB except the last part.`;
+  }
+}
+
+/**
+ * @since 1.0.0
+ * @category errors
+ *
+ * Thrown when a checksum validation fails during upload.
+ *
+ * **Status Code:** 400
+ * **Error Code:** 10037
+ *
+ * **Supported algorithms:**
+ * - MD5
+ * - SHA-1
+ * - SHA-256
+ * - SHA-384
+ * - SHA-512
+ *
+ * @example
+ * ```typescript
+ * import { Effect } from "effect"
+ * import * as R2 from "@effect-cloudflare/R2Bucket"
+ * import * as Option from "effect/Option"
+ *
+ * const program = Effect.gen(function* () {
+ *   const bucket = yield* R2.R2Bucket
+ *
+ *   // This will throw R2BadDigestError if checksum doesn't match
+ *   yield* bucket.put("key", "value", {
+ *     md5: Option.some("wrong-checksum")
+ *   })
+ * }).pipe(
+ *   Effect.catchTag("R2BadDigestError", (error) =>
+ *     Effect.log(`Checksum mismatch: ${error.reason}`)
+ *   )
+ * )
+ * ```
+ */
+export class R2BadDigestError extends Schema.TaggedError<R2BadDigestError>(
+  "@effect-cloudflare/R2BucketError/BadDigest",
+)("R2BadDigestError", {
+  key: Schema.String,
+  operation: R2Operation,
+  reason: Schema.String,
+  algorithm: Schema.optional(Schema.String),
+}) {
+  /**
+   * @since 1.0.0
+   */
+  readonly [TypeId]: typeof TypeId = TypeId;
+
+  /**
+   * @since 1.0.0
+   */
+  override get message(): string {
+    const algoMsg = this.algorithm ? ` (${this.algorithm})` : "";
+    return `R2 checksum validation failed${algoMsg} for key "${this.key}" during ${this.operation}: ${this.reason}`;
+  }
+}
+
+/**
+ * @since 1.0.0
+ * @category errors
+ *
+ * Thrown when list operation receives invalid limit parameter.
+ *
+ * **Status Code:** 400
+ * **Error Code:** 10022
+ *
+ * **Constraint:** limit must be positive integer <= 1000
+ *
+ * @example
+ * ```typescript
+ * import { Effect } from "effect"
+ * import * as R2 from "@effect-cloudflare/R2Bucket"
+ * import * as Option from "effect/Option"
+ *
+ * const program = Effect.gen(function* () {
+ *   const bucket = yield* R2.R2Bucket
+ *
+ *   // This will throw R2InvalidMaxKeysError
+ *   yield* bucket.list({ limit: Option.some(10000) })
+ * }).pipe(
+ *   Effect.catchTag("R2InvalidMaxKeysError", (error) =>
+ *     Effect.log("Invalid limit for list operation")
+ *   )
+ * )
+ * ```
+ */
+export class R2InvalidMaxKeysError extends Schema.TaggedError<R2InvalidMaxKeysError>(
+  "@effect-cloudflare/R2BucketError/InvalidMaxKeys",
+)("R2InvalidMaxKeysError", {
+  operation: R2Operation,
+  limit: Schema.optional(Schema.Number),
+}) {
+  /**
+   * @since 1.0.0
+   */
+  readonly [TypeId]: typeof TypeId = TypeId;
+
+  /**
+   * @since 1.0.0
+   */
+  override get message(): string {
+    const limitMsg = this.limit !== undefined ? ` (${this.limit})` : "";
+    return `R2 invalid MaxKeys parameter${limitMsg} during ${this.operation}. MaxKeys must be positive integer <= 1000.`;
+  }
+}
+
+/**
+ * @since 1.0.0
+ * @category errors
+ *
+ * Thrown when invalid range request is made.
+ *
+ * **Status Code:** 416
+ * **Error Code:** 10039
+ *
+ * **Invalid ranges:**
+ * - Offset beyond object size
+ * - Invalid suffix value
+ * - Invalid length value
+ *
+ * @example
+ * ```typescript
+ * import { Effect } from "effect"
+ * import * as R2 from "@effect-cloudflare/R2Bucket"
+ * import * as Option from "effect/Option"
+ *
+ * const program = Effect.gen(function* () {
+ *   const bucket = yield* R2.R2Bucket
+ *
+ *   // This will throw R2InvalidRangeError if offset is beyond object size
+ *   yield* bucket.get("key", {
+ *     range: Option.some({ offset: 999999999 }),
+ *     onlyIf: Option.none()
+ *   })
+ * }).pipe(
+ *   Effect.catchTag("R2InvalidRangeError", (error) =>
+ *     Effect.log("Invalid range request")
+ *   )
+ * )
+ * ```
+ */
+export class R2InvalidRangeError extends Schema.TaggedError<R2InvalidRangeError>(
+  "@effect-cloudflare/R2BucketError/InvalidRange",
+)("R2InvalidRangeError", {
+  key: Schema.String,
+  operation: R2Operation,
+  reason: Schema.String,
+}) {
+  /**
+   * @since 1.0.0
+   */
+  readonly [TypeId]: typeof TypeId = TypeId;
+
+  /**
+   * @since 1.0.0
+   */
+  override get message(): string {
+    return `R2 invalid range for key "${this.key}" during ${this.operation}: ${this.reason}`;
+  }
+}
+
+/**
+ * @since 1.0.0
+ * @category errors
+ *
+ * Thrown when invalid arguments or metadata are provided.
+ *
+ * **Status Code:** 400
+ * **Error Code:** 10029
+ *
+ * **Common scenarios:**
+ * - Missing required metadata
+ * - Invalid metadata format
+ * - Invalid argument values
+ *
+ * @example
+ * ```typescript
+ * import { Effect } from "effect"
+ * import * as R2 from "@effect-cloudflare/R2Bucket"
+ *
+ * const program = Effect.gen(function* () {
+ *   const bucket = yield* R2.R2Bucket
+ *   yield* bucket.put("key", "value")
+ * }).pipe(
+ *   Effect.catchTag("R2InvalidArgumentError", (error) =>
+ *     Effect.log(`Invalid argument: ${error.reason}`)
+ *   )
+ * )
+ * ```
+ */
+export class R2InvalidArgumentError extends Schema.TaggedError<R2InvalidArgumentError>(
+  "@effect-cloudflare/R2BucketError/InvalidArgument",
+)("R2InvalidArgumentError", {
+  operation: R2Operation,
+  reason: Schema.String,
+  key: Schema.optional(Schema.String),
+}) {
+  /**
+   * @since 1.0.0
+   */
+  readonly [TypeId]: typeof TypeId = TypeId;
+
+  /**
+   * @since 1.0.0
+   */
+  override get message(): string {
+    const keyMsg = this.key ? ` for key "${this.key}"` : "";
+    return `R2 invalid argument${keyMsg} during ${this.operation}: ${this.reason}`;
+  }
+}
+
+/**
+ * @since 1.0.0
+ * @category errors
+ *
+ * Thrown for internal server errors during R2 operations.
+ *
+ * **Status Code:** 500
+ * **Error Code:** 10001
+ *
+ * @example
+ * ```typescript
+ * import { Effect, Schedule } from "effect"
+ * import * as R2 from "@effect-cloudflare/R2Bucket"
+ *
+ * const program = Effect.gen(function* () {
+ *   const bucket = yield* R2.R2Bucket
+ *   yield* bucket.get("key")
+ * }).pipe(
+ *   Effect.catchTag("R2InternalError", (error) =>
+ *     Effect.log("Internal server error, retrying...")
+ *   ),
+ *   Effect.retry(Schedule.exponential("100 millis", 2))
+ * )
+ * ```
+ */
+export class R2InternalError extends Schema.TaggedError<R2InternalError>(
+  "@effect-cloudflare/R2BucketError/Internal",
+)("R2InternalError", {
+  operation: R2Operation,
+  reason: Schema.String,
+  key: Schema.optional(Schema.String),
+}) {
+  /**
+   * @since 1.0.0
+   */
+  readonly [TypeId]: typeof TypeId = TypeId;
+
+  /**
+   * @since 1.0.0
+   */
+  override get message(): string {
+    const keyMsg = this.key ? ` for key "${this.key}"` : "";
+    return `R2 internal error${keyMsg} during ${this.operation}: ${this.reason}`;
+  }
+}
+
+/**
+ * @since 1.0.0
  * @category models
  */
 export type R2BucketError =
   | R2RateLimitError
   | R2ConcurrencyError
   | R2ObjectTooLargeError
+  | R2ObjectTooSmallError
   | R2InvalidKeyError
+  | R2InvalidRangeError
   | R2MetadataError
   | R2PreconditionFailedError
   | R2MultipartError
   | R2BucketNotFoundError
   | R2NotEnabledError
   | R2AuthorizationError
+  | R2BadDigestError
+  | R2InvalidMaxKeysError
+  | R2InvalidArgumentError
+  | R2InternalError
   | R2NetworkError;
 
 /**
@@ -862,30 +1202,115 @@ const mapError = (
   const status = (error as any)?.status;
   const code = (error as any)?.code;
 
-  // Handle error codes first
-  if (code === 10006 || message.includes("NoSuchBucket")) {
-    return new R2BucketNotFoundError({
-      operation,
-    });
+  // Priority 1: Check v4code (R2 error codes)
+  switch (code) {
+    case R2ErrorCode.INTERNAL_ERROR:
+      return new R2InternalError({
+        operation,
+        reason: extractReason(message),
+        key,
+      });
+
+    case R2ErrorCode.ENTITY_TOO_LARGE:
+      return new R2ObjectTooLargeError({
+        key: key ?? "",
+        operation,
+      });
+
+    case R2ErrorCode.ENTITY_TOO_SMALL:
+      return new R2ObjectTooSmallError({
+        key: key ?? "",
+        operation,
+      });
+
+    case R2ErrorCode.METADATA_TOO_LARGE:
+      return new R2MetadataError({
+        key: key ?? "",
+        operation,
+        reason: "Metadata exceeds size limit",
+      });
+
+    case R2ErrorCode.INVALID_OBJECT_NAME:
+      return new R2InvalidKeyError({
+        key: key ?? "",
+        operation,
+        reason: extractReason(message),
+      });
+
+    case R2ErrorCode.INVALID_MAX_KEYS:
+      return new R2InvalidMaxKeysError({
+        operation,
+      });
+
+    case R2ErrorCode.NO_SUCH_UPLOAD:
+      return new R2MultipartError({
+        key,
+        operation,
+        reason: "The specified multipart upload does not exist",
+      });
+
+    case R2ErrorCode.INVALID_PART:
+      return new R2MultipartError({
+        key,
+        operation,
+        reason: "One or more of the specified parts could not be found",
+      });
+
+    case R2ErrorCode.INVALID_ARGUMENT:
+      return new R2InvalidArgumentError({
+        operation,
+        reason: extractReason(message),
+        key,
+      });
+
+    case R2ErrorCode.PRECONDITION_FAILED:
+      return new R2PreconditionFailedError({
+        key: key ?? "",
+        operation,
+        condition: extractReason(message),
+      });
+
+    case R2ErrorCode.BAD_DIGEST:
+      return new R2BadDigestError({
+        key: key ?? "",
+        operation,
+        reason: extractReason(message),
+      });
+
+    case R2ErrorCode.INVALID_RANGE:
+      return new R2InvalidRangeError({
+        key: key ?? "",
+        operation,
+        reason: extractReason(message),
+      });
+
+    case R2ErrorCode.BAD_UPLOAD:
+      return new R2MultipartError({
+        key,
+        operation,
+        reason: "There was a problem with the multipart upload",
+      });
+
+    case 10006: // NoSuchBucket
+      return new R2BucketNotFoundError({
+        operation,
+      });
+
+    case 10042: // R2 not enabled
+      return new R2NotEnabledError({
+        operation,
+      });
   }
 
-  if (code === 10042 || message.includes("Please enable")) {
-    return new R2NotEnabledError({
-      operation,
-    });
-  }
-
-  // Handle by status code
+  // Priority 2: Check HTTP status codes
   switch (status) {
     case 429:
-      // Rate limit exceeded
       return new R2RateLimitError({
         key: key ?? "",
         operation,
       });
 
     case 412:
-      // Precondition failed
       return new R2PreconditionFailedError({
         key: key ?? "",
         operation,
@@ -893,52 +1318,41 @@ const mapError = (
       });
 
     case 416:
-      // Range not satisfiable
-      return new R2InvalidKeyError({
+      return new R2InvalidRangeError({
         key: key ?? "",
         operation,
-        reason: "Invalid range request",
+        reason: extractReason(message),
       });
-
-    case 414:
-      // Key too long
-      return new R2InvalidKeyError({
-        key: key ?? "",
-        operation,
-        reason: "Key exceeds 1024 byte limit",
-      });
-
-    case 413: {
-      // Disambiguate 413 errors
-      if (message.includes("metadata") || message.includes("Metadata")) {
-        return new R2MetadataError({
-          key: key ?? "",
-          operation,
-          reason: "Metadata exceeds 8192 byte limit",
-        });
-      }
-      // Object too large
-      return new R2ObjectTooLargeError({
-        key: key ?? "",
-        operation,
-      });
-    }
 
     case 401:
     case 403:
-      // Authorization errors
       return new R2AuthorizationError({
         operation,
         reason: extractReason(message),
       });
 
-    case 400: {
-      // Disambiguate 400 errors
+    case 500:
+      return new R2InternalError({
+        operation,
+        reason: extractReason(message),
+        key,
+      });
+
+    case 400:
+      // Fallback 400 handling via message inspection
       if (
         message.includes("key") &&
         (message.includes("empty") || message.includes("invalid"))
       ) {
         return new R2InvalidKeyError({
+          key: key ?? "",
+          operation,
+          reason: extractReason(message),
+        });
+      }
+
+      if (message.includes("metadata") || message.includes("Metadata")) {
+        return new R2MetadataError({
           key: key ?? "",
           operation,
           reason: extractReason(message),
@@ -959,36 +1373,67 @@ const mapError = (
         });
       }
 
-      // Other 400 errors
-      return new R2NetworkError({
-        key,
-        operation,
-        reason: extractReason(message),
-        cause: error,
-      });
-    }
-
-    default:
-      // Check for concurrency errors
-      if (
-        message.includes("TooMuchConcurrency") ||
-        message.includes("concurrency")
-      ) {
-        return new R2ConcurrencyError({
-          key,
+      if (message.includes("digest") || message.includes("checksum")) {
+        return new R2BadDigestError({
+          key: key ?? "",
           operation,
           reason: extractReason(message),
         });
       }
 
-      // Network errors, 5xx, timeouts, unknown status
-      return new R2NetworkError({
-        key,
+      if (message.includes("too large") || message.includes("exceeds")) {
+        return new R2ObjectTooLargeError({
+          key: key ?? "",
+          operation,
+        });
+      }
+
+      if (message.includes("too small")) {
+        return new R2ObjectTooSmallError({
+          key: key ?? "",
+          operation,
+        });
+      }
+
+      // Generic 400 error
+      return new R2InvalidArgumentError({
         operation,
-        reason: message,
-        cause: error,
+        reason: extractReason(message),
+        key,
       });
   }
+
+  // Priority 3: Message-based detection for non-standard errors
+  if (message.includes("NoSuchBucket")) {
+    return new R2BucketNotFoundError({
+      operation,
+    });
+  }
+
+  if (message.includes("Please enable") || message.includes("not entitled")) {
+    return new R2NotEnabledError({
+      operation,
+    });
+  }
+
+  if (
+    message.includes("TooMuchConcurrency") ||
+    message.includes("concurrency")
+  ) {
+    return new R2ConcurrencyError({
+      key,
+      operation,
+      reason: extractReason(message),
+    });
+  }
+
+  // Fallback: Network/unknown error
+  return new R2NetworkError({
+    key,
+    operation,
+    reason: message,
+    cause: error,
+  });
 };
 
 /**
