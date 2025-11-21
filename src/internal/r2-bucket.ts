@@ -9,11 +9,6 @@ import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
 import { dual } from "effect/Function";
 
-/**
- * @since 1.0.0
- * @category constants
- * @internal
- */
 const R2ErrorCode = {
   INTERNAL_ERROR: 10001,
   NO_SUCH_OBJECT_KEY: 10007,
@@ -1004,6 +999,121 @@ export class R2InternalError extends Schema.TaggedError<R2InternalError>(
 }
 
 /**
+ * Error thrown when attempting to read an R2ObjectBody that has already been consumed.
+ *
+ * @since 1.0.0
+ * @category errors
+ * @example
+ * ```typescript
+ * import { Effect } from "effect"
+ * import { R2Bucket } from "@effect-cloudflare/r2-bucket"
+ *
+ * Effect.gen(function* () {
+ *   const bucket = yield* R2Bucket
+ *   const obj = yield* bucket.get("key").pipe(Effect.flatten)
+ *
+ *   // First consumption
+ *   yield* obj.text
+ *
+ *   // This will throw R2BodyAlreadyUsedError
+ *   yield* obj.arrayBuffer
+ * }).pipe(
+ *   Effect.catchTag("R2BodyAlreadyUsedError", (error) =>
+ *     Effect.log("Body already consumed")
+ *   )
+ * )
+ * ```
+ */
+export class R2BodyAlreadyUsedError extends Schema.TaggedError<R2BodyAlreadyUsedError>(
+  "@effect-cloudflare/R2BucketError/BodyAlreadyUsed",
+)("R2BodyAlreadyUsedError", {
+  key: Schema.String,
+  method: Schema.Literal("arrayBuffer", "text", "json", "blob"),
+}) {
+  /**
+   * @since 1.0.0
+   */
+  override get message(): string {
+    return `R2 object body for key "${this.key}" has already been consumed. Cannot call ${this.method}() on a used body.`;
+  }
+}
+
+/**
+ * Error thrown when JSON parsing fails on R2ObjectBody.json().
+ *
+ * @since 1.0.0
+ * @category errors
+ * @example
+ * ```typescript
+ * import { Effect } from "effect"
+ * import { R2Bucket } from "@effect-cloudflare/r2-bucket"
+ *
+ * Effect.gen(function* () {
+ *   const bucket = yield* R2Bucket
+ *   const obj = yield* bucket.get("non-json-file.txt").pipe(Effect.flatten)
+ *
+ *   // This will throw R2BodyJSONParseError
+ *   yield* obj.json()
+ * }).pipe(
+ *   Effect.catchTag("R2BodyJSONParseError", (error) =>
+ *     Effect.log(`Failed to parse JSON: ${error.reason}`)
+ *   )
+ * )
+ * ```
+ */
+export class R2BodyJSONParseError extends Schema.TaggedError<R2BodyJSONParseError>(
+  "@effect-cloudflare/R2BucketError/BodyJSONParse",
+)("R2BodyJSONParseError", {
+  key: Schema.String,
+  reason: Schema.String,
+}) {
+  /**
+   * @since 1.0.0
+   */
+  override get message(): string {
+    return `Failed to parse R2 object body for key "${this.key}" as JSON: ${this.reason}`;
+  }
+}
+
+/**
+ * Error thrown when body consumption fails for reasons other than already-used or JSON parsing.
+ *
+ * @since 1.0.0
+ * @category errors
+ * @example
+ * ```typescript
+ * import { Effect } from "effect"
+ * import { R2Bucket } from "@effect-cloudflare/r2-bucket"
+ *
+ * Effect.gen(function* () {
+ *   const bucket = yield* R2Bucket
+ *   const obj = yield* bucket.get("key").pipe(Effect.flatten)
+ *
+ *   // Network error or stream corruption
+ *   yield* obj.text
+ * }).pipe(
+ *   Effect.catchTag("R2BodyConsumptionError", (error) =>
+ *     Effect.log(`Body read failed: ${error.reason}`)
+ *   )
+ * )
+ * ```
+ */
+export class R2BodyConsumptionError extends Schema.TaggedError<R2BodyConsumptionError>(
+  "@effect-cloudflare/R2BucketError/BodyConsumption",
+)("R2BodyConsumptionError", {
+  key: Schema.String,
+  method: Schema.Literal("arrayBuffer", "text", "json", "blob"),
+  reason: Schema.String,
+}) {
+  /**
+   * @since 1.0.0
+   */
+  override get message(): string {
+    return `Failed to consume R2 object body for key "${this.key}" with ${this.method}(): ${this.reason}`;
+  }
+}
+
+/**
  * @since 1.0.0
  * @category models
  */
@@ -1024,161 +1134,171 @@ export type R2BucketError =
   | R2InvalidMaxKeysError
   | R2InvalidArgumentError
   | R2InternalError
-  | R2NetworkError;
+  | R2NetworkError
+  | R2BodyAlreadyUsedError
+  | R2BodyJSONParseError
+  | R2BodyConsumptionError;
 
-/**
- * @since 1.0.0
- * @category models
- */
-export interface R2Range {
-  readonly offset?: number;
-  readonly length?: number;
-  readonly suffix?: number;
+export interface R2Object extends globalThis.R2Object {
+  "~raw": globalThis.R2Object;
 }
 
 /**
+ * R2ObjectBody with Effect-based body consumption methods.
+ * Access the raw Promise-based R2ObjectBody via R2ObjectBodyRawSymbol.
+ *
  * @since 1.0.0
  * @category models
- */
-export interface R2Conditional {
-  readonly etagMatches?: string;
-  readonly etagDoesNotMatch?: string;
-  readonly uploadedBefore?: Date;
-  readonly uploadedAfter?: Date;
-  readonly secondsGranularity?: boolean;
-}
-
-/**
- * @since 1.0.0
- * @category models
- */
-export interface R2HTTPMetadata {
-  readonly contentType?: string;
-  readonly contentLanguage?: string;
-  readonly contentDisposition?: string;
-  readonly contentEncoding?: string;
-  readonly cacheControl?: string;
-  readonly cacheExpiry?: Date;
-}
-
-/**
- * @since 1.0.0
- * @category models
- */
-export interface R2Checksums {
-  readonly md5?: ArrayBuffer;
-  readonly sha1?: ArrayBuffer;
-  readonly sha256?: ArrayBuffer;
-  readonly sha384?: ArrayBuffer;
-  readonly sha512?: ArrayBuffer;
-}
-
-/**
- * @since 1.0.0
- * @category models
- */
-export interface R2Object {
-  readonly key: string;
-  readonly version: string;
-  readonly size: number;
-  readonly etag: string;
-  readonly httpEtag: string;
-  readonly checksums: R2Checksums;
-  readonly uploaded: Date;
-  readonly httpMetadata?: R2HTTPMetadata;
-  readonly customMetadata?: Record<string, string>;
-  readonly range?: R2Range;
-}
-
-/**
- * @since 1.0.0
- * @category models
+ * @example
+ * ```typescript
+ * import { Effect } from "effect"
+ * import { R2Bucket, R2ObjectBodyRawSymbol } from "@effect-cloudflare/r2-bucket"
+ *
+ * Effect.gen(function* () {
+ *   const bucket = yield* R2Bucket
+ *   const obj = yield* bucket.get("data.json").pipe(Effect.flatten)
+ *
+ *   // Effect-based consumption
+ *   const data = yield* obj.json<{ name: string }>()
+ *
+ *   // Access raw R2ObjectBody if needed
+ *   const raw = obj[R2ObjectBodyRawSymbol]
+ *   const textPromise = raw.text() // Returns Promise<string>
+ * })
+ * ```
  */
 export interface R2ObjectBody extends R2Object {
   readonly body: ReadableStream;
   readonly bodyUsed: boolean;
-  readonly arrayBuffer: () => Promise<ArrayBuffer>;
-  readonly text: () => Promise<string>;
-  readonly json: <T>() => Promise<T>;
-  readonly blob: () => Promise<Blob>;
-}
-
-/**
- * @since 1.0.0
- * @category models
- */
-export interface R2Objects<Metadata = unknown> {
-  readonly objects: ReadonlyArray<R2Object>;
-  readonly truncated: boolean;
-  readonly cursor?: string;
-  readonly delimitedPrefixes: ReadonlyArray<string>;
-}
-
-/**
- * @since 1.0.0
- * @category models
- */
-export interface R2UploadedPart {
-  readonly partNumber: number;
-  readonly etag: string;
-}
-
-/**
- * @since 1.0.0
- * @category models
- */
-export interface GetOptions {
-  readonly onlyIf: Option.Option<R2Conditional>;
-  readonly range: Option.Option<R2Range>;
-}
-
-/**
- * @since 1.0.0
- * @category models
- */
-export interface PutOptions {
-  readonly onlyIf: Option.Option<R2Conditional>;
-  readonly httpMetadata: Option.Option<R2HTTPMetadata>;
-  readonly customMetadata: Option.Option<Record<string, string>>;
-  readonly md5: Option.Option<ArrayBuffer | string>;
-  readonly sha1: Option.Option<ArrayBuffer | string>;
-  readonly sha256: Option.Option<ArrayBuffer | string>;
-  readonly sha384: Option.Option<ArrayBuffer | string>;
-  readonly sha512: Option.Option<ArrayBuffer | string>;
-}
-
-/**
- * @since 1.0.0
- * @category models
- */
-export interface ListOptions {
-  readonly limit: Option.Option<number>;
-  readonly prefix: Option.Option<string>;
-  readonly cursor: Option.Option<string>;
-  readonly delimiter: Option.Option<string>;
-  readonly startAfter: Option.Option<string>;
-  readonly include: Option.Option<
-    ReadonlyArray<"httpMetadata" | "customMetadata">
+  readonly arrayBuffer: Effect.Effect<
+    ArrayBuffer,
+    R2BodyAlreadyUsedError | R2BodyConsumptionError
   >;
+  readonly text: Effect.Effect<
+    string,
+    R2BodyAlreadyUsedError | R2BodyConsumptionError
+  >;
+  readonly json: <T>() => Effect.Effect<
+    T,
+    R2BodyAlreadyUsedError | R2BodyJSONParseError | R2BodyConsumptionError
+  >;
+  readonly blob: Effect.Effect<
+    Blob,
+    R2BodyAlreadyUsedError | R2BodyConsumptionError
+  >;
+  readonly "~raw": globalThis.R2ObjectBody;
 }
 
 /**
- * @since 1.0.0
- * @category models
- */
-export interface MultipartOptions {
-  readonly httpMetadata: Option.Option<R2HTTPMetadata>;
-  readonly customMetadata: Option.Option<Record<string, string>>;
-}
-
-/**
- * @internal
- * @category error mapping
+ * Wraps native R2ObjectBody with Effect-based body consumption methods.
  *
- * Helper to extract clean reason from error message
+ * @param raw - The native R2ObjectBody from Cloudflare Workers
+ * @param key - The object key for error messages
+ * @returns R2ObjectBody with Effect-based methods
  */
-const extractReason = (message: string): string => {
-  return message;
+const wrapR2Object = (raw: globalThis.R2Object): R2Object => {
+  return {
+    checksums: raw.checksums,
+    customMetadata: raw.customMetadata,
+    etag: raw.etag,
+    httpEtag: raw.httpEtag,
+    httpMetadata: raw.httpMetadata,
+    key: raw.key,
+    range: raw.range,
+    size: raw.size,
+    ssecKeyMd5: raw.ssecKeyMd5,
+    storageClass: raw.storageClass,
+    uploaded: raw.uploaded,
+    version: raw.version,
+    writeHttpMetadata: raw.writeHttpMetadata.bind(raw),
+    "~raw": raw,
+  };
+};
+/**
+ * Wraps native R2ObjectBody with Effect-based body consumption methods.
+ *
+ * @param raw - The native R2ObjectBody from Cloudflare Workers
+ * @param key - The object key for error messages
+ * @returns R2ObjectBody with Effect-based methods
+ */
+const wrapR2ObjectBody = (
+  raw: globalThis.R2ObjectBody,
+  key: string,
+): R2ObjectBody => {
+  const wrapMethod = <T>(
+    method: "arrayBuffer" | "text" | "blob",
+    fn: () => Promise<T>,
+  ): Effect.Effect<T, R2BodyAlreadyUsedError | R2BodyConsumptionError> =>
+    Effect.tryPromise({
+      try: fn,
+      catch: (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+
+        // Check for TypeError indicating body already used
+        if (
+          error instanceof TypeError &&
+          (message.includes("Body is unusable") ||
+            message.includes("already been read") ||
+            message.includes("disturbed") ||
+            message.includes("locked"))
+        ) {
+          return new R2BodyAlreadyUsedError({ key, method });
+        }
+
+        // Generic consumption error
+        return new R2BodyConsumptionError({
+          key,
+          method,
+          reason: message,
+        });
+      },
+    });
+
+  const wrapJSON = <T>(
+    fn: () => Promise<T>,
+  ): Effect.Effect<
+    T,
+    R2BodyAlreadyUsedError | R2BodyJSONParseError | R2BodyConsumptionError
+  > =>
+    Effect.tryPromise({
+      try: fn,
+      catch: (error) => {
+        const message = error instanceof Error ? error?.message : String(error);
+
+        // Check for TypeError indicating body already used
+        if (
+          error instanceof TypeError &&
+          (message.includes("Body is unusable") ||
+            message.includes("already been read") ||
+            message.includes("disturbed") ||
+            message.includes("locked"))
+        ) {
+          return new R2BodyAlreadyUsedError({ key, method: "json" });
+        }
+
+        // Check for SyntaxError from JSON.parse
+        if (error instanceof SyntaxError) {
+          return new R2BodyJSONParseError({ key, reason: message });
+        }
+
+        // Generic consumption error
+        return new R2BodyConsumptionError({
+          key,
+          method: "json",
+          reason: message,
+        });
+      },
+    });
+
+  return Object.assign(wrapR2Object(raw), {
+    body: raw.body,
+    bodyUsed: raw.bodyUsed,
+    arrayBuffer: wrapMethod("arrayBuffer", () => raw.arrayBuffer()),
+    blob: wrapMethod("blob", () => raw.blob()),
+    json: <T>() => wrapJSON<T>(() => raw.json<T>()),
+    text: wrapMethod("text", () => raw.text()),
+    "~raw": raw,
+  });
 };
 
 /**
@@ -1207,7 +1327,7 @@ const mapError = (
     case R2ErrorCode.INTERNAL_ERROR:
       return new R2InternalError({
         operation,
-        reason: extractReason(message),
+        reason: message,
         key,
       });
 
@@ -1234,7 +1354,7 @@ const mapError = (
       return new R2InvalidKeyError({
         key: key ?? "",
         operation,
-        reason: extractReason(message),
+        reason: message,
       });
 
     case R2ErrorCode.INVALID_MAX_KEYS:
@@ -1259,7 +1379,7 @@ const mapError = (
     case R2ErrorCode.INVALID_ARGUMENT:
       return new R2InvalidArgumentError({
         operation,
-        reason: extractReason(message),
+        reason: message,
         key,
       });
 
@@ -1267,21 +1387,21 @@ const mapError = (
       return new R2PreconditionFailedError({
         key: key ?? "",
         operation,
-        condition: extractReason(message),
+        condition: message,
       });
 
     case R2ErrorCode.BAD_DIGEST:
       return new R2BadDigestError({
         key: key ?? "",
         operation,
-        reason: extractReason(message),
+        reason: message,
       });
 
     case R2ErrorCode.INVALID_RANGE:
       return new R2InvalidRangeError({
         key: key ?? "",
         operation,
-        reason: extractReason(message),
+        reason: message,
       });
 
     case R2ErrorCode.BAD_UPLOAD:
@@ -1314,27 +1434,27 @@ const mapError = (
       return new R2PreconditionFailedError({
         key: key ?? "",
         operation,
-        condition: extractReason(message),
+        condition: message,
       });
 
     case 416:
       return new R2InvalidRangeError({
         key: key ?? "",
         operation,
-        reason: extractReason(message),
+        reason: message,
       });
 
     case 401:
     case 403:
       return new R2AuthorizationError({
         operation,
-        reason: extractReason(message),
+        reason: message,
       });
 
     case 500:
       return new R2InternalError({
         operation,
-        reason: extractReason(message),
+        reason: message,
         key,
       });
 
@@ -1347,7 +1467,7 @@ const mapError = (
         return new R2InvalidKeyError({
           key: key ?? "",
           operation,
-          reason: extractReason(message),
+          reason: message,
         });
       }
 
@@ -1355,7 +1475,7 @@ const mapError = (
         return new R2MetadataError({
           key: key ?? "",
           operation,
-          reason: extractReason(message),
+          reason: message,
         });
       }
 
@@ -1369,7 +1489,7 @@ const mapError = (
         return new R2MultipartError({
           key,
           operation,
-          reason: extractReason(message),
+          reason: message,
         });
       }
 
@@ -1377,7 +1497,7 @@ const mapError = (
         return new R2BadDigestError({
           key: key ?? "",
           operation,
-          reason: extractReason(message),
+          reason: message,
         });
       }
 
@@ -1398,7 +1518,7 @@ const mapError = (
       // Generic 400 error
       return new R2InvalidArgumentError({
         operation,
-        reason: extractReason(message),
+        reason: message,
         key,
       });
   }
@@ -1423,7 +1543,7 @@ const mapError = (
     return new R2ConcurrencyError({
       key,
       operation,
-      reason: extractReason(message),
+      reason: message,
     });
   }
 
@@ -1466,27 +1586,27 @@ export interface R2Bucket {
     (key: string): Effect.Effect<Option.Option<R2ObjectBody>, R2BucketError>;
     (
       key: string,
-      options: GetOptions,
+      options: R2GetOptions,
     ): Effect.Effect<Option.Option<R2ObjectBody | R2Object>, R2BucketError>;
   };
 
   readonly put: (
     key: string,
     value: ReadableStream | ArrayBuffer | ArrayBufferView | string | Blob,
-    options?: PutOptions,
+    options?: R2PutOptions,
   ) => Effect.Effect<Option.Option<R2Object>, R2BucketError>;
 
   readonly delete: (
     keys: string | ReadonlyArray<string>,
   ) => Effect.Effect<void, R2BucketError>;
 
-  readonly list: <Metadata = unknown>(
-    options?: ListOptions,
-  ) => Effect.Effect<R2Objects<Metadata>, R2BucketError>;
+  readonly list: (
+    options?: R2ListOptions,
+  ) => Effect.Effect<R2Objects, R2BucketError>;
 
   readonly createMultipartUpload: (
     key: string,
-    options?: MultipartOptions,
+    options?: R2MultipartOptions,
   ) => Effect.Effect<R2MultipartUpload, R2BucketError>;
 
   readonly resumeMultipartUpload: (
@@ -1494,36 +1614,6 @@ export interface R2Bucket {
     uploadId: string,
   ) => R2MultipartUpload;
 }
-
-/**
- * @internal
- * Helper to convert R2Conditional from Option to native format
- */
-const convertConditional = (
-  conditional: Option.Option<R2Conditional>,
-): R2Conditional | undefined => {
-  return Option.getOrUndefined(conditional);
-};
-
-/**
- * @internal
- * Helper to convert R2Range from Option to native format
- */
-const convertRange = (
-  range: Option.Option<R2Range>,
-): { offset?: number; length?: number; suffix?: number } | undefined => {
-  return Option.getOrUndefined(range);
-};
-
-/**
- * @internal
- * Helper to convert R2HTTPMetadata from Option to native format
- */
-const convertHTTPMetadata = (
-  metadata: Option.Option<R2HTTPMetadata>,
-): R2HTTPMetadata | undefined => {
-  return Option.getOrUndefined(metadata);
-};
 
 /**
  * @internal
@@ -1582,80 +1672,36 @@ export const make = (bucket: globalThis.R2Bucket): R2Bucket => {
         catch: (error) => mapError(error, "head", key),
       }),
 
-    get: ((...args: unknown[]) => {
-      const [key, options] = args as [string, GetOptions | undefined];
-
-      if (!options) {
-        return Effect.tryPromise({
-          try: async () => {
-            const result = await bucket.get(key as string);
-            return result === null
-              ? Option.none()
-              : Option.some(result as R2ObjectBody);
-          },
-          catch: (error) => mapError(error, "get", key as string),
-        });
-      }
-
-      const nativeOptions: any = {};
-      if (Option.isSome(options.onlyIf)) {
-        nativeOptions.onlyIf = convertConditional(options.onlyIf);
-      }
-      if (Option.isSome(options.range)) {
-        nativeOptions.range = convertRange(options.range);
-      }
-
+    get: (key, options?: R2GetOptions) => {
       return Effect.tryPromise({
         try: async () => {
-          const result = await bucket.get(key as string, nativeOptions);
-          return result === null
-            ? Option.none()
-            : Option.some(result as R2ObjectBody | R2Object);
+          const result = await bucket.get(key, options);
+
+          if (result === null) {
+            return Option.none();
+          }
+
+          if (isR2ObjectBody(result)) {
+            const wrapped: Option.Option<R2ObjectBody> = Option.some(
+              wrapR2ObjectBody(result, key),
+            );
+            return wrapped;
+          }
+
+          const wrapped: Option.Option<R2Object> = Option.some(
+            wrapR2Object(result),
+          );
+
+          return wrapped;
         },
-        catch: (error) => mapError(error, "get", key as string),
-      });
-    }) as R2Bucket["get"],
+        catch: (error) => mapError(error, "get", key),
+      }) as any;
+    },
 
     put: (key, value, options) =>
       Effect.tryPromise({
         try: async () => {
-          const nativeOptions: any = {};
-          if (options) {
-            if (Option.isSome(options.onlyIf)) {
-              nativeOptions.onlyIf = convertConditional(options.onlyIf);
-            }
-            if (Option.isSome(options.httpMetadata)) {
-              nativeOptions.httpMetadata = convertHTTPMetadata(
-                options.httpMetadata,
-              );
-            }
-            if (Option.isSome(options.customMetadata)) {
-              nativeOptions.customMetadata = Option.getOrUndefined(
-                options.customMetadata,
-              );
-            }
-            if (Option.isSome(options.md5)) {
-              nativeOptions.md5 = Option.getOrUndefined(options.md5);
-            }
-            if (Option.isSome(options.sha1)) {
-              nativeOptions.sha1 = Option.getOrUndefined(options.sha1);
-            }
-            if (Option.isSome(options.sha256)) {
-              nativeOptions.sha256 = Option.getOrUndefined(options.sha256);
-            }
-            if (Option.isSome(options.sha384)) {
-              nativeOptions.sha384 = Option.getOrUndefined(options.sha384);
-            }
-            if (Option.isSome(options.sha512)) {
-              nativeOptions.sha512 = Option.getOrUndefined(options.sha512);
-            }
-          }
-
-          const result = await bucket.put(
-            key,
-            value,
-            Object.keys(nativeOptions).length > 0 ? nativeOptions : undefined,
-          );
+          const result = await bucket.put(key, value, options);
           return result === null
             ? Option.none()
             : Option.some(result as R2Object);
@@ -1666,50 +1712,16 @@ export const make = (bucket: globalThis.R2Bucket): R2Bucket => {
     delete: (keys) =>
       Effect.tryPromise({
         try: async () => {
-          await bucket.delete(keys as any);
+          return bucket.delete(keys as any);
         },
         catch: (error) =>
           mapError(error, "delete", typeof keys === "string" ? keys : keys[0]),
       }),
 
-    list: <Metadata = unknown>(options?: ListOptions) =>
+    list: (options) =>
       Effect.tryPromise({
         try: async () => {
-          const nativeOptions: any = {};
-          if (options) {
-            if (Option.isSome(options.limit)) {
-              nativeOptions.limit = Option.getOrUndefined(options.limit);
-            }
-            if (Option.isSome(options.prefix)) {
-              nativeOptions.prefix = Option.getOrUndefined(options.prefix);
-            }
-            if (Option.isSome(options.cursor)) {
-              nativeOptions.cursor = Option.getOrUndefined(options.cursor);
-            }
-            if (Option.isSome(options.delimiter)) {
-              nativeOptions.delimiter = Option.getOrUndefined(
-                options.delimiter,
-              );
-            }
-            if (Option.isSome(options.startAfter)) {
-              nativeOptions.startAfter = Option.getOrUndefined(
-                options.startAfter,
-              );
-            }
-            if (Option.isSome(options.include)) {
-              nativeOptions.include = Option.getOrUndefined(options.include);
-            }
-          }
-
-          const result = await bucket.list(nativeOptions);
-          return {
-            objects: result.objects as ReadonlyArray<R2Object>,
-            truncated: result.truncated,
-            // @ts-expect-error `cursor` is a conditional field
-            cursor: result.cursor,
-            delimitedPrefixes:
-              result.delimitedPrefixes as ReadonlyArray<string>,
-          };
+          return bucket.list(options);
         },
         catch: (error) => mapError(error, "list"),
       }),
@@ -1717,24 +1729,7 @@ export const make = (bucket: globalThis.R2Bucket): R2Bucket => {
     createMultipartUpload: (key, options) =>
       Effect.tryPromise({
         try: async () => {
-          const nativeOptions: any = {};
-          if (options) {
-            if (Option.isSome(options.httpMetadata)) {
-              nativeOptions.httpMetadata = convertHTTPMetadata(
-                options.httpMetadata,
-              );
-            }
-            if (Option.isSome(options.customMetadata)) {
-              nativeOptions.customMetadata = Option.getOrUndefined(
-                options.customMetadata,
-              );
-            }
-          }
-
-          const upload = await bucket.createMultipartUpload(
-            key,
-            Object.keys(nativeOptions).length > 0 ? nativeOptions : undefined,
-          );
+          const upload = await bucket.createMultipartUpload(key, options);
           return wrapMultipartUpload(upload);
         },
         catch: (error) => mapError(error, "createMultipartUpload", key),
@@ -1759,8 +1754,9 @@ export const R2Bucket = Context.GenericTag<R2Bucket>(
  * @since 1.0.0
  * @category layers
  */
-export const layer = (bucket: globalThis.R2Bucket): Layer.Layer<R2Bucket> =>
-  Layer.succeed(R2Bucket, make(bucket));
+export const layer = (bucket: globalThis.R2Bucket): Layer.Layer<R2Bucket> => {
+  return Layer.succeed(R2Bucket, make(bucket));
+};
 
 /**
  * @since 1.0.0
@@ -1782,3 +1778,29 @@ export const withR2Bucket: {
   ): Effect.Effect<A, E, R> =>
     Effect.provideService(effect, R2Bucket, make(bucket)),
 );
+
+/**
+ * @since 1.0.0
+ * @internal
+ */
+function isR2ObjectBody(value: unknown): value is R2ObjectBody {
+  const isNotNullable = Predicate.isNotNullable(value);
+  const hasBody = Predicate.hasProperty(value, "body");
+  const hasBodyUsed = Predicate.hasProperty(value, "bodyUsed");
+  const hasArrayBuffer = Predicate.hasProperty(value, "arrayBuffer");
+  const hasBytes = Predicate.hasProperty(value, "bytes");
+  const hasText = Predicate.hasProperty(value, "text");
+  const hasJson = Predicate.hasProperty(value, "json");
+  const hasBlob = Predicate.hasProperty(value, "blob");
+
+  return (
+    isNotNullable &&
+    hasBody &&
+    hasBodyUsed &&
+    hasArrayBuffer &&
+    hasBytes &&
+    hasText &&
+    hasJson &&
+    hasBlob
+  );
+}

@@ -16,8 +16,7 @@ export default Worker.makeFetchEntryPoint(
     // yield* env.BUCKET.put("tmp/foobar.json", JSON.stringify({ foo: "bar" }));
     const obj = yield* env.BUCKET.get("foobar.json").pipe(Effect.flatten);
 
-    const value = yield* Effect.promise(() => obj.json<{ foo: "bar" }>());
-
+    const value = yield* obj.json<{ foo: "bar" }>();
     console.log({ value });
 
     ctx.waitUntil(
