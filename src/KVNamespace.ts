@@ -12,9 +12,6 @@ export type {
   KVOperation,
   ListKey,
   ListResult,
-  GetOptions,
-  PutOptions,
-  ListOptions,
   GetWithMetadataResult,
 } from "./internal/kv-namespace";
 
@@ -35,7 +32,8 @@ export {
  * @since 1.0.0
  * @category models
  */
-export type KVNamespace<Key extends string = string> = internal.KVNamespace<Key>;
+export type KVNamespace<Key extends string = string> =
+  internal.KVNamespace<Key>;
 
 /**
  * @since 1.0.0
@@ -55,9 +53,8 @@ export const make: <Key extends string = string>(
  * @since 1.0.0
  * @category layers
  */
-export const layer: (
-  kv: globalThis.KVNamespace,
-) => Layer.Layer<KVNamespace> = internal.layer;
+export const layer: (kv: globalThis.KVNamespace) => Layer.Layer<KVNamespace> =
+  internal.layer;
 
 /**
  * @since 1.0.0

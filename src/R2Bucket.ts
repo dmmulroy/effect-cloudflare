@@ -10,19 +10,9 @@ import * as internal from "./internal/r2-bucket";
 export type {
   R2BucketError,
   R2Operation,
-  R2Range,
-  R2Conditional,
-  R2HTTPMetadata,
-  R2Checksums,
   R2Object,
   R2ObjectBody,
-  R2Objects,
-  R2UploadedPart,
   R2MultipartUpload,
-  GetOptions,
-  PutOptions,
-  ListOptions,
-  MultipartOptions,
 } from "./internal/r2-bucket";
 
 export {

@@ -49,49 +49,6 @@ export const KVOperation = Schema.Literal(
 export type KVOperation = typeof KVOperation.Type;
 
 /**
- * @internal
- * @category error mapping reference
- *
- * # Additional Error Scenarios
- *
- * These errors are thrown by the KV runtime but may not be correctly mapped by `mapError`:
- *
- * ## Bulk Operation Errors
- * @see https://github.com/cloudflare/workers-sdk/blob/main/packages/miniflare/src/workers/kv/namespace.worker.ts#L143-L150 - Max/min key validation
- * @see https://github.com/cloudflare/workers-sdk/blob/main/packages/miniflare/test/plugins/kv/index.spec.ts#L139-L178 - Bulk operation tests
- *
- * - Max keys: `"KV GET_BULK failed: 400 You can request a maximum of 100 keys"`
- * - Min keys: `"KV GET_BULK failed: 400 You must request a minimum of 1 key"`
- * - Invalid type: `"KV GET_BULK failed: 400 \"invalid\" is not a valid type. Use \"json\" or \"text\""`
- * - Size limit: `"KV GET_BULK failed: 413 Total size of request exceeds the limit of 25MB"`
- *
- * **Current mapping:** Falls through to `KVBulkLimitError` (400) or `KVResponseTooLargeError` (413)
- *
- * ## List Operation Errors
- * @see https://github.com/cloudflare/workers-sdk/blob/main/packages/miniflare/src/workers/kv/validator.worker.ts#L131-L152 - List validation
- *
- * - Invalid limit: `"KV LIST failed: 400 Invalid key_count_limit of {X}. Please specify an integer greater than 0."`
- * - Limit too high: `"KV LIST failed: 400 Invalid key_count_limit of {X}. Please specify an integer less than 1000."`
- * - Prefix too long: `"KV LIST failed: 414 UTF-8 encoded length of {X} exceeds key length limit of 512."`
- *
- * **Current mapping:** Falls through to `KVListLimitError` (400) or `KVInvalidKeyError` (414)
- *
- * ## Get Operation Errors
- * @see https://github.com/cloudflare/workers-sdk/blob/main/packages/miniflare/test/plugins/kv/index.spec.ts#L280-L294 - CacheTtl validation test
- *
- * - Invalid cacheTtl: `"KV GET failed: 400 Invalid cache_ttl of {X}. Cache TTL must be at least 60."`
- *
- * **Current mapping:** Falls through to `KVCacheTtlError` (400)
- *
- * ## Not Found Behavior (Not an Error)
- * @see https://developers.cloudflare.com/kv/api/read-key-value-pairs/ - "the promise will resolve with the literal value null"
- *
- * - Missing keys return `Option.none()`, not errors
- * - 404 only exists in internal HTTP layer, not exposed to users
- * - `get()`, `getWithMetadata()` return `Option.Option<T>` for this reason
- */
-
-/**
  * @since 1.0.0
  * @category errors
  * @see https://developers.cloudflare.com/kv/api/write-key-value-pairs/ - Rate limiting documentation
@@ -892,35 +849,6 @@ export type ListResult<Metadata = unknown, Key extends string = string> =
  * @since 1.0.0
  * @category models
  */
-export interface GetOptions<Type> {
-  readonly type: Type;
-  readonly cacheTtl: Option.Option<number>;
-}
-
-/**
- * @since 1.0.0
- * @category models
- */
-export interface PutOptions {
-  readonly expiration: Option.Option<number>;
-  readonly expirationTtl: Option.Option<number>;
-  readonly metadata: Option.Option<unknown>;
-}
-
-/**
- * @since 1.0.0
- * @category models
- */
-export interface ListOptions {
-  readonly prefix: Option.Option<string>;
-  readonly limit: Option.Option<number>;
-  readonly cursor: Option.Option<string>;
-}
-
-/**
- * @since 1.0.0
- * @category models
- */
 export interface GetWithMetadataResult<Value, Metadata> {
   readonly value: Option.Option<Value>;
   readonly metadata: Option.Option<Metadata>;
@@ -935,7 +863,7 @@ export interface KVNamespace<Key extends string = string> {
   readonly get: {
     (
       key: Key,
-      options?: Partial<GetOptions<undefined>>,
+      options?: Partial<KVNamespaceGetOptions<undefined>>,
     ): Effect.Effect<Option.Option<string>, KVNamespaceError>;
     (
       key: Key,
@@ -955,19 +883,19 @@ export interface KVNamespace<Key extends string = string> {
     ): Effect.Effect<Option.Option<ReadableStream>, KVNamespaceError>;
     (
       key: Key,
-      options: GetOptions<"text">,
+      options: KVNamespaceGetOptions<"text">,
     ): Effect.Effect<Option.Option<string>, KVNamespaceError>;
     <ExpectedValue = unknown>(
       key: Key,
-      options: GetOptions<"json">,
+      options: KVNamespaceGetOptions<"json">,
     ): Effect.Effect<Option.Option<ExpectedValue>, KVNamespaceError>;
     (
       key: Key,
-      options: GetOptions<"arrayBuffer">,
+      options: KVNamespaceGetOptions<"arrayBuffer">,
     ): Effect.Effect<Option.Option<ArrayBuffer>, KVNamespaceError>;
     (
       key: Key,
-      options: GetOptions<"stream">,
+      options: KVNamespaceGetOptions<"stream">,
     ): Effect.Effect<Option.Option<ReadableStream>, KVNamespaceError>;
     (
       key: ReadonlyArray<Key>,
@@ -985,21 +913,21 @@ export interface KVNamespace<Key extends string = string> {
     >;
     (
       key: ReadonlyArray<Key>,
-      options?: Partial<GetOptions<undefined>>,
+      options?: Partial<KVNamespaceGetOptions<undefined>>,
     ): Effect.Effect<
       ReadonlyMap<string, Option.Option<string>>,
       KVNamespaceError
     >;
     (
       key: ReadonlyArray<Key>,
-      options: GetOptions<"text">,
+      options: KVNamespaceGetOptions<"text">,
     ): Effect.Effect<
       ReadonlyMap<string, Option.Option<string>>,
       KVNamespaceError
     >;
     <ExpectedValue = unknown>(
       key: ReadonlyArray<Key>,
-      options: GetOptions<"json">,
+      options: KVNamespaceGetOptions<"json">,
     ): Effect.Effect<
       ReadonlyMap<string, Option.Option<ExpectedValue>>,
       KVNamespaceError
@@ -1007,19 +935,19 @@ export interface KVNamespace<Key extends string = string> {
   };
 
   readonly list: <Metadata = unknown>(
-    options?: ListOptions,
+    options?: KVNamespaceListOptions,
   ) => Effect.Effect<ListResult<Metadata, Key>, KVNamespaceError>;
 
   readonly put: (
     key: Key,
     value: string | ArrayBuffer | ArrayBufferView | ReadableStream,
-    options?: PutOptions,
+    options?: KVNamespacePutOptions,
   ) => Effect.Effect<void, KVNamespaceError>;
 
   readonly getWithMetadata: {
     <Metadata = unknown>(
       key: Key,
-      options?: Partial<GetOptions<undefined>>,
+      options?: Partial<KVNamespaceGetOptions<undefined>>,
     ): Effect.Effect<GetWithMetadataResult<string, Metadata>, KVNamespaceError>;
     <Metadata = unknown>(
       key: Key,
@@ -1048,25 +976,25 @@ export interface KVNamespace<Key extends string = string> {
     >;
     <Metadata = unknown>(
       key: Key,
-      options: GetOptions<"text">,
+      options: KVNamespaceGetOptions<"text">,
     ): Effect.Effect<GetWithMetadataResult<string, Metadata>, KVNamespaceError>;
     <ExpectedValue = unknown, Metadata = unknown>(
       key: Key,
-      options: GetOptions<"json">,
+      options: KVNamespaceGetOptions<"json">,
     ): Effect.Effect<
       GetWithMetadataResult<ExpectedValue, Metadata>,
       KVNamespaceError
     >;
     <Metadata = unknown>(
       key: Key,
-      options: GetOptions<"arrayBuffer">,
+      options: KVNamespaceGetOptions<"arrayBuffer">,
     ): Effect.Effect<
       GetWithMetadataResult<ArrayBuffer, Metadata>,
       KVNamespaceError
     >;
     <Metadata = unknown>(
       key: Key,
-      options: GetOptions<"stream">,
+      options: KVNamespaceGetOptions<"stream">,
     ): Effect.Effect<
       GetWithMetadataResult<ReadableStream, Metadata>,
       KVNamespaceError
@@ -1087,21 +1015,21 @@ export interface KVNamespace<Key extends string = string> {
     >;
     <Metadata = unknown>(
       key: ReadonlyArray<Key>,
-      options?: Partial<GetOptions<undefined>>,
+      options?: Partial<KVNamespaceGetOptions<undefined>>,
     ): Effect.Effect<
       ReadonlyMap<string, GetWithMetadataResult<string, Metadata>>,
       KVNamespaceError
     >;
     <Metadata = unknown>(
       key: ReadonlyArray<Key>,
-      options: GetOptions<"text">,
+      options: KVNamespaceGetOptions<"text">,
     ): Effect.Effect<
       ReadonlyMap<string, GetWithMetadataResult<string, Metadata>>,
       KVNamespaceError
     >;
     <ExpectedValue = unknown, Metadata = unknown>(
       key: ReadonlyArray<Key>,
-      options: GetOptions<"json">,
+      options: KVNamespaceGetOptions<"json">,
     ): Effect.Effect<
       ReadonlyMap<string, GetWithMetadataResult<ExpectedValue, Metadata>>,
       KVNamespaceError
@@ -1365,15 +1293,10 @@ export const make = <Key extends string = string>(
       });
     }) as KVNamespace<Key>["get"],
 
-    list: <Metadata = unknown>(options?: ListOptions) => {
+    list: <Metadata = unknown>(options?: KVNamespaceListOptions) => {
       return Effect.tryPromise({
         try: async () => {
-          const rawOptions = {
-            limit: Option.getOrUndefined(options?.limit ?? Option.none()),
-            prefix: Option.getOrUndefined(options?.prefix ?? Option.none()),
-            cursor: Option.getOrUndefined(options?.cursor ?? Option.none()),
-          };
-          const result = await kv.list<Metadata>(rawOptions);
+          const result = await kv.list<Metadata>(options);
 
           const keys: Array<ListKey<Metadata, Key>> = result.keys.map((k) => ({
             name: k.name,
@@ -1414,20 +1337,7 @@ export const make = <Key extends string = string>(
     put: (key, value, options) => {
       return Effect.tryPromise({
         try: async () => {
-          const rawOptions = options
-            ? {
-                expiration: Option.getOrUndefined(
-                  options.expiration ?? Option.none(),
-                ),
-                expirationTtl: Option.getOrUndefined(
-                  options.expirationTtl ?? Option.none(),
-                ),
-                metadata: Option.getOrUndefined(
-                  options.metadata ?? Option.none(),
-                ),
-              }
-            : undefined;
-          await kv.put(key, value, rawOptions);
+          return kv.put(key, value, options);
         },
         catch: (error) => mapError(error, "put", key),
       });
@@ -1509,7 +1419,7 @@ export const make = <Key extends string = string>(
     delete: (key) => {
       return Effect.tryPromise({
         try: async () => {
-          await kv.delete(key);
+          return kv.delete(key);
         },
         catch: (error) => mapError(error, "delete", key),
       });

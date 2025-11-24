@@ -38,8 +38,14 @@ export default Worker.makeFetchEntryPoint(
 );
 
 export const asyncEntryPoint = {
-  fetch(req: Request, env: Cloudflare.Env, ctx: globalThis.ExecutionContext) {
+  async fetch(
+    req: Request,
+    env: Cloudflare.Env,
+    ctx: globalThis.ExecutionContext,
+  ) {
     const maybeValue = env.KV.get("last_accessed");
+
+    const result = await env.DB.batch({} as D1PreparedStatement[]);
 
     ctx.waitUntil(
       (async () => {

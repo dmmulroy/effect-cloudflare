@@ -8,6 +8,11 @@ import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
 import { dual } from "effect/Function";
+import {
+  type D1Database as NativeD1Database,
+  type D1PreparedStatement as NativeD1PreparedStatement,
+  type D1DatabaseSession as NativeD1DatabaseSession,
+} from "@cloudflare/workers-types";
 
 /**
  * @since 1.0.0
@@ -775,21 +780,25 @@ export interface D1PreparedStatement {
   readonly all: <T = unknown>() => Effect.Effect<D1Result<T>, D1DatabaseError>;
 
   readonly raw: {
-    <T = unknown>(): Effect.Effect<
-      ReadonlyArray<ReadonlyArray<T>>,
-      D1DatabaseError
-    >;
     <T = unknown>(options: {
       readonly columnNames: true;
-    }): Effect.Effect<
-      ReadonlyArray<ReadonlyArray<T | string>>,
-      D1DatabaseError
-    >;
+    }): Effect.Effect<ReadonlyArray<[string[], ...T[]]>, D1DatabaseError>;
+    <T = unknown>(options?: {
+      readonly columnNames: false;
+    }): Effect.Effect<ReadonlyArray<ReadonlyArray<T>>, D1DatabaseError>;
   };
 
-  readonly _sql: string;
-  readonly _native: any;
+  readonly "~raw": NativeD1PreparedStatement;
 }
+
+/**
+ * @since 1.0.0
+ * @category models
+ */
+export type D1SessionConstraintOrBookmark =
+  | "first-primary"
+  | "first-unconstrained"
+  | (string & {});
 
 /**
  * @since 1.0.0
@@ -797,6 +806,15 @@ export interface D1PreparedStatement {
  */
 export interface D1DatabaseSession {
   readonly prepare: (sql: string) => D1PreparedStatement;
+  batch<T = unknown>(
+    statements: D1PreparedStatement[],
+  ): Effect.Effect<ReadonlyArray<D1Result<T>>, D1DatabaseError>;
+  /**
+   * @returns The latest session bookmark across all executed queries on the session.
+   *          If no query has been executed yet, `None` is returned.
+   */
+  getBookmark(): Effect.Effect<Option.Option<D1SessionBookmark>>;
+  "~raw": NativeD1DatabaseSession;
 }
 
 /**
@@ -811,19 +829,11 @@ export interface D1Database {
     statements: ReadonlyArray<D1PreparedStatement>,
   ) => Effect.Effect<ReadonlyArray<D1Result<T>>, D1DatabaseError>;
 
-  readonly exec: (
-    sql: string,
-  ) => Effect.Effect<D1ExecResult, D1DatabaseError>;
+  readonly exec: (sql: string) => Effect.Effect<D1ExecResult, D1DatabaseError>;
 
-  readonly withSession: {
-    <A, E>(
-      f: (db: D1DatabaseSession) => Effect.Effect<A, E>,
-    ): Effect.Effect<readonly [A, D1Bookmark], E | D1DatabaseError>;
-    <A, E>(
-      hintOrBookmark: D1SessionLocationHint | D1Bookmark,
-      f: (db: D1DatabaseSession) => Effect.Effect<A, E>,
-    ): Effect.Effect<readonly [A, D1Bookmark], E | D1DatabaseError>;
-  };
+  readonly withSession: (
+    constraintOrBookmark: D1SessionConstraintOrBookmark,
+  ) => Effect.Effect<D1DatabaseSession, D1DatabaseError>;
 }
 
 /**
@@ -902,7 +912,10 @@ const mapError = (
   }
 
   // D1_TYPE_ERROR: Type mismatches
-  if (message.startsWith("D1_TYPE_ERROR:") || /type.*not supported/i.test(message)) {
+  if (
+    message.startsWith("D1_TYPE_ERROR:") ||
+    /type.*not supported/i.test(message)
+  ) {
     return new D1TypeMismatchError({
       sql: sql ?? "",
       operation,
@@ -911,8 +924,13 @@ const mapError = (
   }
 
   // D1_COLUMN_NOTFOUND: Column not found
-  if (message.startsWith("D1_COLUMN_NOTFOUND:") || /column not found/i.test(message)) {
-    const colMatch = message.match(/\(([^)]+)\)/) || message.match(/column not found[:\s]+([^\s]+)/i);
+  if (
+    message.startsWith("D1_COLUMN_NOTFOUND:") ||
+    /column not found/i.test(message)
+  ) {
+    const colMatch =
+      message.match(/\(([^)]+)\)/) ||
+      message.match(/column not found[:\s]+([^\s]+)/i);
     return new D1ColumnNotFoundError({
       sql: sql ?? "",
       operation,
@@ -921,7 +939,10 @@ const mapError = (
   }
 
   // D1_SESSION_ERROR: Session errors
-  if (message.startsWith("D1_SESSION_ERROR:") || /session.*bookmark/i.test(message)) {
+  if (
+    message.startsWith("D1_SESSION_ERROR:") ||
+    /session.*bookmark/i.test(message)
+  ) {
     return new D1SessionError({
       operation,
       reason: extractReason(message),
@@ -934,8 +955,11 @@ const mapError = (
       message,
     )
   ) {
-    let limitType: "queries_per_invocation" | "statement_length" | "bound_parameters" | "query_duration" =
-      "queries_per_invocation";
+    let limitType:
+      | "queries_per_invocation"
+      | "statement_length"
+      | "bound_parameters"
+      | "query_duration" = "queries_per_invocation";
     if (/statement length/i.test(message)) limitType = "statement_length";
     else if (/bound parameters/i.test(message)) limitType = "bound_parameters";
     else if (/query duration/i.test(message)) limitType = "query_duration";
@@ -949,9 +973,14 @@ const mapError = (
   }
 
   // Check for quota errors
-  if (/database size|storage|row size|blob size|database count/i.test(message)) {
-    let quotaType: "database_size" | "account_storage" | "row_size" | "database_count" =
-      "database_size";
+  if (
+    /database size|storage|row size|blob size|database count/i.test(message)
+  ) {
+    let quotaType:
+      | "database_size"
+      | "account_storage"
+      | "row_size"
+      | "database_count" = "database_size";
     if (/storage/i.test(message)) quotaType = "account_storage";
     else if (/row size|blob size/i.test(message)) quotaType = "row_size";
     else if (/database count/i.test(message)) quotaType = "database_count";
@@ -1008,7 +1037,7 @@ const transformMeta = (meta: any): D1Meta => ({
  * @internal
  */
 const makePreparedStatement = (
-  stmt: any,
+  stmt: NativeD1PreparedStatement,
   sql: string,
 ): D1PreparedStatement => {
   return {
@@ -1017,16 +1046,19 @@ const makePreparedStatement = (
       return makePreparedStatement(bound, sql);
     },
 
-    first: ((...args: unknown[]) => {
+    first: <T>(...args: unknown[]) => {
       const columnName = args[0] as string | undefined;
       return Effect.tryPromise({
         try: async () => {
-          const result = await stmt.first(columnName);
-          return result === null ? Option.none() : Option.some(result);
+          const result =
+            columnName !== undefined
+              ? await stmt.first<T>(columnName)
+              : await stmt.first<T>();
+          return Option.fromNullable(result);
         },
         catch: (error) => mapError(error, "first", sql),
       });
-    }) as D1PreparedStatement["first"],
+    },
 
     run: <T>() =>
       Effect.tryPromise({
@@ -1034,9 +1066,9 @@ const makePreparedStatement = (
           const result = await stmt.run<T>();
           return {
             results: result.results ?? [],
-            success: true as const,
+            success: true,
             meta: transformMeta(result.meta),
-          };
+          } as const;
         },
         catch: (error) => mapError(error, "run", sql),
       }),
@@ -1047,43 +1079,41 @@ const makePreparedStatement = (
           const result = await stmt.all<T>();
           return {
             results: result.results ?? [],
-            success: true as const,
+            success: true,
             meta: transformMeta(result.meta),
-          };
+          } as const;
         },
         catch: (error) => mapError(error, "all", sql),
       }),
 
-    raw: ((...args: unknown[]) => {
-      const options = args[0] as { columnNames?: boolean } | undefined;
+    raw: <T>(options?: { columnNames: boolean }) => {
       return Effect.tryPromise({
         try: async () => {
-          const result = await stmt.raw(options);
-          return result;
+          // @ts-expect-error overload type inference
+          return stmt.raw<T>(options);
         },
         catch: (error) => mapError(error, "raw", sql),
       });
-    }) as D1PreparedStatement["raw"],
+    },
 
-    _sql: sql,
-    _native: stmt,
-  };
+    "~raw": stmt,
+  } as const satisfies D1PreparedStatement;
 };
 
 /**
  * @since 1.0.0
  * @category constructors
  */
-export const make = (db: any): D1Database => {
+export const make = (db: NativeD1Database): D1Database => {
   return {
     prepare: (sql: string) => makePreparedStatement(db.prepare(sql), sql),
 
     batch: <T>(statements: ReadonlyArray<D1PreparedStatement>) =>
       Effect.tryPromise({
         try: async () => {
-          const native = statements.map((s) => s._native);
-          const results = await db.batch(native);
-          return results.map((r: any) => ({
+          const native = statements.map((s) => s["~raw"]);
+          const results = await db.batch<T>(native);
+          return results.map((r) => ({
             results: r.results ?? [],
             success: true as const,
             meta: transformMeta(r.meta),
@@ -1104,36 +1134,40 @@ export const make = (db: any): D1Database => {
         catch: (error) => mapError(error, "exec", sql),
       }),
 
-    withSession: ((...args: unknown[]) => {
-      // Parse overloads
-      const hasHintOrBookmark = args.length === 2;
-      const hintOrBookmark = hasHintOrBookmark
-        ? (args[0] as D1SessionLocationHint | D1Bookmark)
-        : undefined;
-      const f = hasHintOrBookmark
-        ? (args[1] as (db: D1DatabaseSession) => Effect.Effect<any, any>)
-        : (args[0] as (db: D1DatabaseSession) => Effect.Effect<any, any>);
+    withSession: (constraintOrBookmark) => {
+      return Effect.try({
+        try: () => {
+          const session = db.withSession(constraintOrBookmark);
 
-      return Effect.tryPromise({
-        try: async () => {
-          let session: any;
-          if (hintOrBookmark) {
-            session = db.withSession(hintOrBookmark);
-          } else {
-            session = db.withSession();
-          }
+          return {
+            prepare: (sql: string) =>
+              makePreparedStatement(session.prepare(sql), sql),
+            batch: <T>(statements: D1PreparedStatement[]) => {
+              return Effect.tryPromise({
+                try: async () => {
+                  const native = statements.map((s) => s["~raw"]);
+                  const results = await db.batch<T>(native);
+                  return results.map(
+                    (r) =>
+                      ({
+                        results: r.results ?? [],
+                        success: true,
+                        meta: transformMeta(r.meta),
+                      }) as const,
+                  );
+                },
+                catch: (error) => mapError(error, "batch"),
+              });
+            },
+            getBookmark: () =>
+              Effect.sync(() => Option.fromNullable(session.getBookmark())),
 
-          const sessionDb: D1DatabaseSession = {
-            prepare: (sql: string) => makePreparedStatement(session.prepare(sql), sql),
+            "~raw": session,
           };
-
-          const result = await Effect.runPromise(f(sessionDb));
-          const bookmark = "";  // TODO: Extract from response headers when available
-          return [result, bookmark] as const;
         },
         catch: (error) => mapError(error, "withSession"),
       });
-    }) as D1Database["withSession"],
+    },
   };
 };
 
@@ -1149,7 +1183,7 @@ export const tag = Context.GenericTag<D1Database>(
  * @since 1.0.0
  * @category layers
  */
-export const layer = (db: any): Layer.Layer<D1Database> =>
+export const layer = (db: NativeD1Database): Layer.Layer<D1Database> =>
   Layer.succeed(tag, make(db));
 
 /**
@@ -1157,15 +1191,17 @@ export const layer = (db: any): Layer.Layer<D1Database> =>
  * @category combinators
  */
 export const withD1Database: {
-  (db: any): <A, E, R>(
-    effect: Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E, R>;
+  (
+    db: NativeD1Database,
+  ): <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   <A, E, R>(
     effect: Effect.Effect<A, E, R>,
-    db: any,
+    db: NativeD1Database,
   ): Effect.Effect<A, E, R>;
 } = dual(
   2,
-  <A, E, R>(effect: Effect.Effect<A, E, R>, db: any): Effect.Effect<A, E, R> =>
-    Effect.provideService(effect, tag, make(db)),
+  <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+    db: NativeD1Database,
+  ): Effect.Effect<A, E, R> => Effect.provideService(effect, tag, make(db)),
 );
